@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>MD转PDF工具</title>
+    <title>AI 文档 / LaTeX 转 PDF 工具</title>
     
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
     
     <style>
+        /* CSS 样式部分保持不变，确保了美观和打印兼容性 */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
@@ -86,7 +87,7 @@
         #preview p { margin: 0.8em 0; }
         #preview strong { color: #333; }
         
-        #preview table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+        #preview table { border-collapse: collapse; width: 100%; margin: 1em 0; overflow-x: auto; display: block; /* 允许手机横向滚动 */ }
         #preview th, #preview td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
         #preview th { background: #f5f5f5; }
         
@@ -128,6 +129,7 @@
             #previewPanel { display: block !important; }
             #preview { padding: 0 !important; }
             .math-block { background: transparent !important; padding: 10px 0; }
+            /* 避免分页符出现在标题和公式块内 */
             #preview h1, #preview h2, #preview h3 { page-break-after: avoid; }
             .math-block, #preview table, #preview pre { page-break-inside: avoid; }
             .math-inline .katex { white-space: normal !important; }
@@ -156,7 +158,7 @@
     </div>
     
     <div id="editPanel" class="content active">
-        <textarea id="editor" placeholder="直接粘贴AI生成的内容..."></textarea>
+        <textarea id="editor" placeholder="直接粘贴AI生成的内容..." oninput="saveDraft()"></textarea>
     </div>
     
     <div id="previewPanel" class="content">
@@ -166,9 +168,27 @@
     <script>
         const editor = document.getElementById('editor');
         const preview = document.getElementById('preview');
-        
+        const editPanel = document.getElementById('editPanel');
+        const previewPanel = document.getElementById('previewPanel');
+
+        // --- 初始化设置 ---
         marked.setOptions({ breaks: true, gfm: true });
-        
+
+        // 尝试加载草稿
+        window.onload = function() {
+            const draft = localStorage.getItem('ai_md_draft');
+            if (draft) {
+                editor.value = draft;
+            }
+            // 确保编辑模式是激活的
+            switchTab('edit', true); 
+        };
+
+        function saveDraft() {
+            localStorage.setItem('ai_md_draft', editor.value);
+        }
+
+        // --- 公式预处理：修复AI常犯的格式错误 ---
         function preprocessFormula(formula) {
             let f = formula.trim();
             
@@ -189,6 +209,7 @@
             return f;
         }
         
+        // --- KaTeX 渲染函数 ---
         function renderKatex(formula, displayMode) {
             try {
                 let f = preprocessFormula(formula);
@@ -203,41 +224,33 @@
             }
         }
         
+        // --- 复杂的行公式检测逻辑（未改动） ---
         function isFormulaLine(line) {
             const trimmed = line.trim();
             if (!trimmed) return false;
             
-            // 【核心修复】先去掉 \text{...} 内容，再检测中文
-            // 这样 \text{常数} 不会导致整行被误判为非公式行
             const withoutText = trimmed.replace(/\\text\s*\{[^}]*\}/g, '');
             
-            // 去掉\text后还包含中文字符，就不是纯公式行
             if (/[\u4e00-\u9fa5]/.test(withoutText)) return false;
-            
-            // 序号开头的行不是纯公式行
             if (/^[$（\[]\d+[$）\]]/.test(trimmed)) return false;
             if (/^\d+[\.、．\)]/.test(trimmed)) return false;
             
-            // 纯英文单词开头（无LaTeX命令）不是公式行
             if (/^[a-zA-Z]/.test(trimmed) && !trimmed.includes('\\') && !/_/.test(trimmed) && !/\^/.test(trimmed)) {
                 return false;
             }
             
-            // 包含LaTeX命令的是公式行
             if (/\\(frac|text|sqrt|sum|prod|int|lambda|phi|alpha|beta|gamma|delta|Delta|theta|omega|pi|sigma|mu|nu|epsilon|rho|tau|chi|psi|Gamma|Omega|Lambda|Phi|Psi|Sigma|cos|sin|tan|log|ln|exp|lim|max|min|arccos|arcsin|arctan|cdot|times|div|pm|mp|leq|geq|neq|approx|equiv|infty|partial|nabla|vec|hat|bar|quad|qquad|left|right|boxed|mu_0|le|ge|Rightarrow|Leftarrow|rightarrow|leftarrow)\b/.test(trimmed)) {
                 return true;
             }
             
-            // 包含下标上标的是公式行
             if (/_\{[^}]+\}|\^\{[^}]+\}|_[a-zA-Z0-9]|\^[a-zA-Z0-9]/.test(trimmed)) return true;
-            // 包含等号且有LaTeX特征的是公式行
             if (/=/.test(trimmed) && /[_^\\{}]/.test(trimmed)) return true;
-            // 以反斜杠命令开头的是公式行
             if (/^\\[a-zA-Z]/.test(trimmed)) return true;
             
             return false;
         }
         
+        // --- 预处理内容，自动添加 $$ 界定符（未改动） ---
         function preprocessContent(text) {
             let lines = text.split('\n');
             let result = [];
@@ -255,12 +268,10 @@
                         let prevLine = result[j];
                         if (prevLine.trim() === '' || prevLine.trim() === '---') break;
                         
-                        // 【修复】检查是否为公式行时，也要排除\text中的中文
                         let prevWithoutText = prevLine.replace(/\\text\s*\{[^}]*\}/g, '');
                         if (/^(已知|设|由|根据|所以|因此|即|当|则|其中|代入|计算|先|再|最后|答案|解|证|注|提示)/.test(prevWithoutText.trim())) break;
                         if (/^[一二三四五六七八九十\d]+[、.．)]/.test(prevLine.trim())) break;
                         if (/^#+\s/.test(prevLine)) break;
-                        // 如果去掉\text后还有中文，说明是描述性文字，不是公式
                         if (/[\u4e00-\u9fa5]/.test(prevWithoutText)) break;
                         
                         formulaLines.unshift(result.pop());
@@ -317,8 +328,8 @@
             return result.join('\n');
         }
         
+        // --- 行内公式自动包裹逻辑（未改动） ---
         function processInlineFormulas(line) {
-            // 如果已经有完整的$...$，跳过
             if (/\$[^$]+\$/.test(line)) return line;
             
             let result = line;
@@ -328,7 +339,6 @@
                 return (before.match(/\$/g) || []).length % 2 === 1;
             }
             
-            // 【修复】处理中文括号内的公式：（1\,\text{eV} = ...）
             result = result.replace(
                 /（([^）]*\\[a-zA-Z][^）]*)）/g,
                 (match, content, offset) => {
@@ -340,7 +350,6 @@
                 }
             );
             
-            // 1. 处理包含 \Rightarrow 的连续推导表达式
             result = result.replace(
                 /(\d+\s*=\s*(?:[^，。；\u4e00-\u9fa5⇒]|\\[a-zA-Z]+|\{[^}]*\})+\\Rightarrow(?:[^，。；\u4e00-\u9fa5]|\\[a-zA-Z]+|\{[^}]*\})+)/g,
                 (match, p1, offset) => {
@@ -349,7 +358,6 @@
                 }
             );
             
-            // 2. 处理以\命令开头的复杂连续表达式
             result = result.replace(
                 /(\\[a-zA-Z]+(?:\\[a-zA-Z]+|[a-zA-Z0-9_{}^]|\{[^}]*\})*\s*=\s*(?:[^，。；：\u4e00-\u9fa5]|\\[a-zA-Z]+|\{[^}]*\})+)/g,
                 (match, p1, offset) => {
@@ -358,7 +366,6 @@
                 }
             );
             
-            // 3. 处理 变量 \approx 数值 单位
             result = result.replace(
                 /([A-Za-z](?:_\{[^}]+\}|_[a-zA-Z0-9])?)\s*\\approx\s*([\d\.]+)\s*((?:\\,|\\\ |\\)?\s*\\text\{[^}]+\})/g,
                 (match, variable, value, unit, offset) => {
@@ -367,7 +374,6 @@
                 }
             );
             
-            // 4. 处理 变量 = 数值 单位
             result = result.replace(
                 /([A-Za-z](?:_\{[^}]+\}|_[a-zA-Z0-9])?)\s*=\s*([\d\.]+(?:\s*\\times\s*10\^[{\d}\-]+)?)\s*((?:\\,|\\\ |\\)?\s*\\text\{[^}]+\})/g,
                 (match, variable, value, unit, offset) => {
@@ -376,7 +382,6 @@
                 }
             );
             
-            // 5. 处理纯数字+单位
             result = result.replace(
                 /(?<![a-zA-Z$=])(\d+(?:\.\d+)?(?:\s*\\times\s*10\^[{\d}\-]+)?)\s*((?:\\,|\\\ |\\)?\s*\\text\{[^}]+\})/g,
                 (match, value, unit, offset) => {
@@ -385,7 +390,6 @@
                 }
             );
             
-            // 6. 处理 k = 复杂表达式 形式
             result = result.replace(
                 /(?<![a-zA-Z$])([a-zA-Z](?:_\{[^}]+\}|_[0-9])?)\s*=\s*((?:\\[a-zA-Z]+|[a-zA-Z0-9_{}^.,\s=]|\{[^}]*\})+?)(?=，|。|；|：|（|\(|[\u4e00-\u9fa5]|$)/g,
                 (match, variable, expr, offset) => {
@@ -397,7 +401,6 @@
                 }
             );
             
-            // 7. 处理简单等式：k=3, k=4 等
             result = result.replace(
                 /(?<![a-zA-Z$\\])([a-zA-Z](?:_\{[^}]+\}|_[a-zA-Z0-9])?)\s*=\s*(-?\d+(?:\.\d+)?(?:\\?\^[{\d}]+)?)(?=[\s,，。；：\u4e00-\u9fa5]|$)(?!\s*\\)/g,
                 (match, variable, value, offset) => {
@@ -406,7 +409,6 @@
                 }
             );
             
-            // 8. 处理比较表达式
             result = result.replace(
                 /(-?\d+|[a-zA-Z](?:_\{[^}]+\}|_[a-zA-Z0-9])?)\s*(\\(?:le|ge|leq|geq)|[<>])\s*(-?\d+|[a-zA-Z](?:_\{[^}]+\}|_[a-zA-Z0-9])?)(?:\s*(\\(?:le|ge|leq|geq)|[<>])\s*(-?\d+|[a-zA-Z](?:_\{[^}]+\}|_[a-zA-Z0-9])?))?(?=：|:|\s|,|，|。|$)/g,
                 (match, v1, op1, v2, op2, v3, offset) => {
@@ -418,7 +420,6 @@
                 }
             );
             
-            // 9. 【增强】处理希腊字母+下标（支持更多形式如 \lambda_m）
             result = result.replace(
                 /(\\(?:lambda|phi|alpha|beta|gamma|delta|Delta|theta|omega|pi|sigma|mu|nu|epsilon|rho|tau|chi|psi|Gamma|Omega|Lambda|Phi|Psi|Sigma)(?:_[a-zA-Z0-9]|_\{[^}]+\})?)/g,
                 (match, p1, offset) => {
@@ -427,7 +428,6 @@
                 }
             );
             
-            // 10. 【增强】处理 E_{\text{...}} 形式的复杂下标
             result = result.replace(
                 /([A-Za-z]_\{\\text\{[^}]+\}\})/g,
                 (match, p1, offset) => {
@@ -436,7 +436,6 @@
                 }
             );
             
-            // 11. 处理简单下标变量（如 U_s, T_1）
             result = result.replace(
                 /(?<![a-zA-Z$\\])([A-Za-z]_[a-zA-Z0-9])(?=[\s,，。；：\u4e00-\u9fa5（）()]|$)/g,
                 (match, p1, offset) => {
@@ -445,7 +444,6 @@
                 }
             );
             
-            // 12. 【新增】处理整个公式块（包含\quad\text{...}）
             result = result.replace(
                 /([A-Za-z](?:_\{[^}]+\}|_[a-zA-Z0-9])?)\s*=\s*(\\frac\{[^}]+\}\{[^}]+\})\s*(\\quad\s*\\text\{[^}]+\})/g,
                 (match, variable, frac, suffix, offset) => {
@@ -454,7 +452,6 @@
                 }
             );
             
-            // 13. 【新增】处理包含三角函数的表达式
             result = result.replace(
                 /([\d\.]+(?:×|\s*\\times\s*)10\^\{?-?\d+\}?\s*=\s*[\d\.]+(?:×|\s*\\times\s*)10\^\{?-?\d+\}?\s*\([^)]*\\cos[^)]*\))/g,
                 (match, p1, offset) => {
@@ -463,19 +460,15 @@
                 }
             );
             
-            // 14. 【新增】处理角度单位：30.0^\circ
             result = result.replace(
                 /(\d+(?:\.\d+)?)(\s*\^\\circ)/g,
                 (match, number, angleUnit, offset) => {
                     if (isInsideDollar(result, offset)) return match;
-                    // 检查前面是否有其他匹配模式
-                    // 如果前面已经有$，或者这是更大表达式的一部分，则不处理
                     if (offset > 0 && result[offset-1] === '$') return match;
                     return '$' + number + angleUnit + '$';
                 }
             );
             
-            // 15. 后备处理：分数、花括号下标变量等
             const patterns = [
                 /(\\frac\{[^}]+\}\{[^}]+\}(?:\s*\\quad\s*\\text\{[^}]+\})?)/g,
                 /([A-Za-z]_\{[^}]+\}(?:\^[{\da-zA-Z}]+)?)/g,
@@ -491,6 +484,7 @@
             return result;
         }
         
+        // --- 预览更新函数 ---
         function updatePreview() {
             let content = editor.value;
             if (!content.trim()) {
@@ -534,26 +528,33 @@
             preview.innerHTML = html;
         }
         
-        function switchTab(tab) {
+        // --- 标签页切换函数（已修复中文句号错误） ---
+        function switchTab(tab, initial = false) {
             document.querySelectorAll('.tab').forEach((t, i) => {
                 t.classList.toggle('active', (tab === 'edit' && i === 0) || (tab === 'preview' && i === 1));
             });
-            document.getElementById('editPanel').classList.toggle('active', tab === 'edit');
-            document.getElementById('previewPanel')。classList.toggle('active', tab === 'preview');
-            if (tab === 'preview') updatePreview();
+            editPanel.classList.toggle('active', tab === 'edit');
+            // 🚨 错误修复点：将中文句号 `。` 替换为英文句点 `.`
+            previewPanel.classList.toggle('active', tab === 'preview'); 
+            
+            if (tab === 'preview' && !initial) updatePreview();
         }
         
+        // --- 导出 PDF 函数 ---
         function exportPDF() {
             if (!editor.value.trim()) { alert('请先输入内容！'); return; }
             updatePreview();
             switchTab('preview');
-            setTimeout(() => window.print(), 300);
+            // 延迟打印，确保公式和图片完成渲染
+            setTimeout(() => window.print(), 300); 
         }
         
+        // --- 清空函数 ---
         function clearAll() {
             if (editor.value && !confirm('确定清空？')) return;
             editor.value = '';
             preview.innerHTML = '';
+            localStorage.removeItem('ai_md_draft'); // 清空草稿
             switchTab('edit');
         }
     </script>
